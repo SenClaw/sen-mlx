@@ -1,0 +1,64 @@
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "sen-mlx"
+version = "0.1.0"
+edition = "2021"
+description = "MLX LLM runtime for SenClaw: chat + vision on Apple Silicon, launched by the daemon and driven over loopback HTTP"
+license = "MIT"
+repository = "https://github.com/SenClaw/sen-mlx"
+
+[[bin]]
+name = "sen-mlx"
+path = "src/main.rs"
+
+[dependencies]
+sen-runtime-sdk = { path = "../senclaw/crates/sen-runtime-sdk" }
+app-space-sdk = { path = "../senclaw/app-space-sdk" }
+
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["json"] }
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+regex = "1"
+libc = "0.2"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+
+# The MLX stack, pinned to the same revision as sen-whisper. `mlx-sys` is a
+# direct read of the MLX allocator (`mlx_get_active_memory`), used by
+# `unload()` to force freed Metal buffers back to the OS.
+mlx-rs = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", features = ["metal", "accelerate"] }
+mlx-sys = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", package = "mlx-sys" }
+turboquant-rs = "0.4.1"
+
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+minijinja = { version = "2", features = ["serde"] }
+minijinja-contrib = { version = "2", features = ["pycompat"] }
+half = "2.4"
+safetensors = "0.4"
+bytemuck = "1"
+# Gemma-4 vision input: decode -> RGB -> 224x224 bicubic -> CHW f32.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+
+# Cargo's debuginfo for build-script units (bindgen inside `mlx-sys`, in
+# particular) is otherwise decided per-invocation-kind rather than per-profile,
+# so `cargo build` and `cargo test`/`check` can fingerprint the same
+# build-script differently and each trigger their own from-scratch rebuild of
+# the whole MLX C++ core. Pinning it off makes the fingerprint stable across
+# `build`/`check`/`test` so one compiled `mlx-sys` is reused by all three.
+[profile.dev.build-override]
+debug = false

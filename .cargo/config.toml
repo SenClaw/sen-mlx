@@ -1,0 +1,10 @@
+[env]
+# MLX's Metal command queue is not safe for concurrent dispatch from multiple
+# OS threads within one process. `mlx_native::mlx_serial_lock` covers the
+# engine's own load/generate/unload path, but a unit test that builds and runs
+# a small MLX graph directly (most of engine::mlx_lm::models::*::tests) sits
+# outside that lock — the default parallel test harness intermittently
+# SIGSEGVs running several such tests on different threads at once. Forcing
+# single-threaded test execution here means a plain `cargo test` is safe
+# without every caller having to remember `--test-threads=1`.
+RUST_TEST_THREADS = "1"

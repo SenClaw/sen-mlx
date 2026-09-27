@@ -1,0 +1,52 @@
+name: release
+
+# Tag v<version> (matching Cargo.toml and senclaw-runtime.json) -> build,
+# test, package, and publish the archive + checksum as release assets, the
+# way every sen-* runtime does (runtime-protocol.md §2.3).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # darwin-arm64 only: MLX is Apple Silicon only, and macos-14 runners are.
+    runs-on: macos-14
+    steps:
+      - name: checkout sen-mlx
+        uses: actions/checkout@v4
+        with:
+          path: sen-mlx
+
+      # sen-runtime-sdk and app-space-sdk are path dependencies
+      # (../senclaw/...); checked out as a sibling so they resolve the same
+      # way they do in local development.
+      - name: checkout senclaw (sibling, for sen-runtime-sdk + app-space-sdk)
+        uses: actions/checkout@v4
+        with:
+          repository: SenClaw/senclaw
+          path: senclaw
+
+      - name: install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: build
+        working-directory: sen-mlx
+        run: make build PROFILE=release
+
+      - name: test
+        working-directory: sen-mlx
+        run: make test
+
+      - name: package
+        working-directory: sen-mlx
+        run: make package PROFILE=release
+
+      - name: release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sen-mlx/dist/*.tar.gz
+            sen-mlx/dist/*.sha256

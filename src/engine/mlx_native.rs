@@ -1841,10 +1841,7 @@ fn generate_with_cache(
     // must beat the checkpoint default, which is why the `unwrap_or_else` sits
     // outside the validity filter — `sample_with` treats those values as off.
     let decode_truncation = SamplingTruncation {
-        top_k: gen_opt
-            .top_k
-            .map(|k| k as i32)
-            .or(state.gen_defaults.top_k),
+        top_k: gen_opt.top_k.map(|k| k as i32).or(state.gen_defaults.top_k),
         top_p: gen_opt.top_p.or(state.gen_defaults.top_p),
     };
     let mut recent_decode_ids: VecDeque<u32> = VecDeque::new();

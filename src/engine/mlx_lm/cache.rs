@@ -731,7 +731,10 @@ impl SteppingKeyValueCache {
             let start = self.stored_len - keep;
             (
                 concatenate_axis(&[slice_axis2(k, start, self.stored_len)?, keys.clone()], 2)?,
-                concatenate_axis(&[slice_axis2(v, start, self.stored_len)?, values.clone()], 2)?,
+                concatenate_axis(
+                    &[slice_axis2(v, start, self.stored_len)?, values.clone()],
+                    2,
+                )?,
             )
         };
         self.keys = Some(ring_k.clone());
@@ -1698,7 +1701,10 @@ mod tests {
         let more = Array::from_slice(&[9.0_f32, 10.0], &[1, 1, 2, 1]);
         let _ = cache.update_and_fetch(more.clone(), more).unwrap();
 
-        assert!(cache.ring_head.is_none(), "multi-token write leaves the ring");
+        assert!(
+            cache.ring_head.is_none(),
+            "multi-token write leaves the ring"
+        );
         assert_eq!(cache.stored_len(), 6, "4 windowed keys + 2 appended");
         assert_eq!(
             time_axis(&cache),

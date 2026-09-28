@@ -55,7 +55,9 @@ async fn main() -> anyhow::Result<()> {
         .model
         .clone()
         .or_else(|| env.model_path.clone())
-        .ok_or_else(|| anyhow::anyhow!("no model: pass --model <path> or set SENCLAW_MODEL_PATH"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("no model: pass --model <path> or set SENCLAW_MODEL_PATH")
+        })?;
     if !model_path.is_dir() {
         anyhow::bail!("--model {} is not a directory", model_path.display());
     }
@@ -65,8 +67,14 @@ async fn main() -> anyhow::Result<()> {
     let model_id = env
         .model_id
         .clone()
-        .or_else(|| model_path.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .ok_or_else(|| anyhow::anyhow!("could not derive a model id from {}", model_path.display()))?;
+        .or_else(|| {
+            model_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!("could not derive a model id from {}", model_path.display())
+        })?;
 
     let readiness = Readiness::loading();
     let provider = MlxProvider::spawn(model_path, model_id, readiness.clone())?;
@@ -79,7 +87,9 @@ async fn main() -> anyhow::Result<()> {
             mode: RunMode::Model,
             capabilities: vec![Capability::Chat, Capability::Vision],
             readiness,
-            info_detail: Some(Arc::new(move || serde_json::json!({ "models": provider.models() }))),
+            info_detail: Some(Arc::new(
+                move || serde_json::json!({ "models": provider.models() }),
+            )),
             args: parsed,
         },
     )

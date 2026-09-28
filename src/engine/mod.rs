@@ -42,7 +42,9 @@ fn has_safetensors(dir: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return false;
     };
-    entries.filter_map(Result::ok).any(|e| e.file_name().to_string_lossy().ends_with(".safetensors"))
+    entries
+        .filter_map(Result::ok)
+        .any(|e| e.file_name().to_string_lossy().ends_with(".safetensors"))
 }
 
 /// Can this engine run the checkpoint in `dir`? Used at startup to fail fast
@@ -96,7 +98,10 @@ pub fn has_vision(dir: &Path) -> bool {
     };
     v.get("vision_config").is_some()
         || v.get("vision_tower").is_some()
-        || v["architectures"]
-            .as_array()
-            .is_some_and(|a| a.iter().any(|s| s.as_str().is_some_and(|s| s.contains("Vision") || s.contains("Conditional"))))
+        || v["architectures"].as_array().is_some_and(|a| {
+            a.iter().any(|s| {
+                s.as_str()
+                    .is_some_and(|s| s.contains("Vision") || s.contains("Conditional"))
+            })
+        })
 }

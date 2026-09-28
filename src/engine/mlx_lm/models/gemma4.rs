@@ -728,7 +728,10 @@ impl Router {
 
         let picked = scores.take_along_axis(&indices, -1)?;
         let weights = softmax_axis(&picked, -1, Some(true))?;
-        let per_expert = self.per_expert_scale.as_ref().take_along_axis(&indices, -1)?;
+        let per_expert = self
+            .per_expert_scale
+            .as_ref()
+            .take_along_axis(&indices, -1)?;
         Ok((indices, weights.multiply(&per_expert)?))
     }
 }
@@ -836,12 +839,7 @@ impl Experts {
     }
 
     #[allow(non_snake_case)]
-    fn forward(
-        &self,
-        x: &Array,
-        indices: &Array,
-        weights: &Array,
-    ) -> Result<Array, Exception> {
+    fn forward(&self, x: &Array, indices: &Array, weights: &Array) -> Result<Array, Exception> {
         let s = weights.shape();
         let (B, L, K) = (s[0], s[1], s[2]);
         let y = self.switch_glu.forward(x, indices)?; // [B, L, K, hidden]

@@ -114,7 +114,9 @@ impl Settings {
         self.max_new_tokens.unwrap_or(DEFAULT_MAX_NEW_TOKENS)
     }
     pub fn max_kv_tokens(&self) -> u32 {
-        self.max_kv_tokens.unwrap_or(DEFAULT_KV_WINDOW_TOKENS).clamp(128, 262_144)
+        self.max_kv_tokens
+            .unwrap_or(DEFAULT_KV_WINDOW_TOKENS)
+            .clamp(128, 262_144)
     }
     pub fn prefill_chunk_tokens(&self) -> u32 {
         self.prefill_chunk_tokens.unwrap_or(512).clamp(32, 4096)
@@ -134,7 +136,10 @@ pub fn settings_path(root: &Path) -> PathBuf {
 /// the inference path, and refusing to generate because a settings file has a
 /// stray comma would be a worse failure than ignoring it.
 pub fn load(root: &Path) -> Settings {
-    std::fs::read_to_string(settings_path(root)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    std::fs::read_to_string(settings_path(root))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 pub fn save(root: &Path, s: &Settings) -> std::io::Result<()> {
@@ -177,13 +182,24 @@ mod tests {
     /// would each write a file the other reads as empty.
     #[test]
     fn the_written_keys_are_the_ones_that_were_read() {
-        let s = Settings { max_new_tokens: Some(1), ..Default::default() };
+        let s = Settings {
+            max_new_tokens: Some(1),
+            ..Default::default()
+        };
         let v: serde_json::Value = serde_json::to_value(&s).unwrap();
         for key in [
-            "max_prompt_tokens", "max_new_tokens", "enable_thinking", "max_kv_tokens",
-            "kv_cache_bits", "idle_unload_secs", "preferred_backend",
+            "max_prompt_tokens",
+            "max_new_tokens",
+            "enable_thinking",
+            "max_kv_tokens",
+            "kv_cache_bits",
+            "idle_unload_secs",
+            "preferred_backend",
         ] {
-            assert!(v.get(key).is_some(), "`{key}` must be written in snake_case");
+            assert!(
+                v.get(key).is_some(),
+                "`{key}` must be written in snake_case"
+            );
         }
     }
 
@@ -193,7 +209,10 @@ mod tests {
         assert_eq!(s.top_k, Some(0), "0 means untruncated, not unset");
 
         let s: Settings = serde_json::from_str("{}").unwrap();
-        assert_eq!(s.top_k, None, "unset must stay None so the checkpoint's own value applies");
+        assert_eq!(
+            s.top_k, None,
+            "unset must stay None so the checkpoint's own value applies"
+        );
     }
 
     #[test]
@@ -204,7 +223,11 @@ mod tests {
 
     #[test]
     fn out_of_range_values_are_clamped_not_obeyed() {
-        let s = Settings { max_kv_tokens: Some(1), prefill_chunk_tokens: Some(999_999), ..Default::default() };
+        let s = Settings {
+            max_kv_tokens: Some(1),
+            prefill_chunk_tokens: Some(999_999),
+            ..Default::default()
+        };
         assert_eq!(s.max_kv_tokens(), 128);
         assert_eq!(s.prefill_chunk_tokens(), 4096);
     }
@@ -213,7 +236,10 @@ mod tests {
     fn weights_are_kept_five_minutes_not_the_space_app_default_of_sixty_seconds() {
         assert_eq!(Settings::default().idle_unload_secs(), 300);
         // 0 is an explicit "never unload", not a fallback to the default.
-        let s = Settings { idle_unload_secs: Some(0), ..Default::default() };
+        let s = Settings {
+            idle_unload_secs: Some(0),
+            ..Default::default()
+        };
         assert_eq!(s.idle_unload_secs(), 0);
     }
 
@@ -227,7 +253,12 @@ mod tests {
     #[test]
     fn settings_round_trip_through_disk() {
         let dir = tempfile::tempdir().unwrap();
-        let s = Settings { temperature: Some(0.0), top_k: Some(0), max_new_tokens: Some(1234), ..Default::default() };
+        let s = Settings {
+            temperature: Some(0.0),
+            top_k: Some(0),
+            max_new_tokens: Some(1234),
+            ..Default::default()
+        };
         save(dir.path(), &s).unwrap();
         let back = load(dir.path());
         assert_eq!(back.temperature, Some(0.0), "greedy must survive the trip");

@@ -68,8 +68,14 @@ impl MlxProvider {
         // `generate_with_cache` uses on every turn.
         let settings_dir = model_dir.parent().unwrap_or(&model_dir).to_path_buf();
         let settings = crate::settings::load(&settings_dir);
-        let context_length = crate::engine::context_length(&model_dir).unwrap_or_else(|| settings.max_prompt_tokens());
-        let card = ModelCard::new(model_id.clone(), context_length, settings.max_new_tokens(), vision);
+        let context_length = crate::engine::context_length(&model_dir)
+            .unwrap_or_else(|| settings.max_prompt_tokens());
+        let card = ModelCard::new(
+            model_id.clone(),
+            context_length,
+            settings.max_new_tokens(),
+            vision,
+        );
         let kv_cache_bits = settings.kv_cache_bits.filter(|b| *b > 0);
 
         let (tx, rx) = watch::channel(LoadState::Loading);
@@ -119,7 +125,9 @@ impl MlxProvider {
                 LoadState::Failed(msg) => return Err(anyhow!("model failed to load: {msg}")),
                 LoadState::Loading => {}
             }
-            rx.changed().await.map_err(|_| anyhow!("model load task ended without a result"))?;
+            rx.changed()
+                .await
+                .map_err(|_| anyhow!("model load task ended without a result"))?;
         }
     }
 }
@@ -176,17 +184,31 @@ impl LlmProvider for MlxProvider {
             // The parser returns OpenAI-shaped calls; the SDK re-renders them as
             // indexed streaming deltas.
             let id = tc["id"].as_str().unwrap_or_default().to_string();
-            let name = tc["function"]["name"].as_str().unwrap_or_default().to_string();
-            let arguments = tc["function"]["arguments"].as_str().unwrap_or("{}").to_string();
+            let name = tc["function"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let arguments = tc["function"]["arguments"]
+                .as_str()
+                .unwrap_or("{}")
+                .to_string();
             if name.is_empty() {
                 continue;
             }
-            sink.send(Chunk::ToolCall { id, name, arguments }).await;
+            sink.send(Chunk::ToolCall {
+                id,
+                name,
+                arguments,
+            })
+            .await;
         }
 
         if let Some((prompt_tokens, completion_tokens)) = engine.last_usage() {
-            sink.send(Chunk::Usage { prompt_tokens: prompt_tokens as u64, completion_tokens: completion_tokens as u64 })
-                .await;
+            sink.send(Chunk::Usage {
+                prompt_tokens: prompt_tokens as u64,
+                completion_tokens: completion_tokens as u64,
+            })
+            .await;
         }
 
         // Same contract the daemon's own turn loop had: `release_cache_after_session`
@@ -194,7 +216,10 @@ impl LlmProvider for MlxProvider {
         // generation) at the end of a turn while keeping the weights warm.
         let settings_dir = engine.model_dir().parent().map(Path::to_path_buf);
         if let Some(dir) = settings_dir {
-            if crate::settings::load(&dir).release_cache_after_session.unwrap_or(false) {
+            if crate::settings::load(&dir)
+                .release_cache_after_session
+                .unwrap_or(false)
+            {
                 engine.release_kv_cache();
             }
         }
@@ -217,7 +242,9 @@ mod tests {
         // `Arc<MlxProvider>`, which does not implement `Debug` (nor does the
         // engine it can hold), so `unwrap_err`'s bound on `T: Debug` does not
         // hold here.
-        let err = MlxProvider::spawn(dir.path().to_path_buf(), "test/model".into(), readiness).err().unwrap();
+        let err = MlxProvider::spawn(dir.path().to_path_buf(), "test/model".into(), readiness)
+            .err()
+            .unwrap();
         assert!(err.to_string().contains("not a checkpoint"), "{err}");
     }
 }

@@ -132,6 +132,15 @@ impl MlxProvider {
     }
 }
 
+/// Resolves once the client of this turn has gone away (the SDK side of the
+/// sink was dropped). `ChunkSink` only offers the non-blocking check, so poll
+/// it; a quarter second is far below any cancel a person would notice.
+async fn client_gone(sink: &ChunkSink) {
+    while !sink.is_closed() {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
 #[async_trait::async_trait]
 impl LlmProvider for MlxProvider {
     fn models(&self) -> Vec<ModelCard> {
@@ -161,7 +170,21 @@ impl LlmProvider for MlxProvider {
             )
         };
 
-        while let Some(ev) = rx.recv().await {
+        let mut made_tool_call = false;
+        loop {
+            // The daemon cancels a turn (user stop, stall, ACP cancel) by
+            // dropping the connection — all this process ever sees is the SDK's
+            // side of `sink` going away. Stop reading then: dropping `rx` makes
+            // the parser pipe's next send fail, which drops the engine's token
+            // channel, and the decode loop ends at its next token. That is the
+            // old in-process adapter's `abort()` on cancel; without it an
+            // abandoned answer ran to `max_new_tokens` (4 087 tokens, 88s
+            // measured) and every later request queued behind it.
+            let ev = tokio::select! {
+                ev = rx.recv() => ev,
+                () = client_gone(&sink) => break,
+            };
+            let Some(ev) = ev else { break };
             match ev {
                 ParserEvent::Reasoning(s) if !s.is_empty() => {
                     sink.send(Chunk::Reasoning(s)).await;
@@ -185,6 +208,7 @@ impl LlmProvider for MlxProvider {
                     if name.is_empty() {
                         continue;
                     }
+                    made_tool_call = true;
                     sink.send(Chunk::ToolCall {
                         id,
                         name,
@@ -195,7 +219,16 @@ impl LlmProvider for MlxProvider {
                 _ => {}
             }
         }
-        gen.await??;
+        // Closing the receiver is what stops an abandoned generation (see above);
+        // for a finished one it is a no-op.
+        drop(rx);
+        let gen_result = gen.await?;
+        if sink.is_closed() {
+            // Nobody is listening: whatever the engine returned after its
+            // channel closed under it is not an error worth reporting.
+            return Ok(());
+        }
+        gen_result?;
 
         if let Some((prompt_tokens, completion_tokens)) = engine.last_usage() {
             sink.send(Chunk::Usage {
@@ -207,9 +240,12 @@ impl LlmProvider for MlxProvider {
 
         // Same contract the daemon's own turn loop had: `release_cache_after_session`
         // drops the per-session KV (worth hundreds of MB after a long
-        // generation) at the end of a turn while keeping the weights warm.
+        // generation) at the end of a turn while keeping the weights warm —
+        // but only on a turn with no tool call. A tool call means the agent
+        // loop is coming straight back with this prompt plus the result, and
+        // dropping the prefix cache there would re-prefill it in full.
         let settings_dir = engine.model_dir().parent().map(Path::to_path_buf);
-        if let Some(dir) = settings_dir {
+        if let (false, Some(dir)) = (made_tool_call, settings_dir) {
             if crate::settings::load(&dir)
                 .release_cache_after_session
                 .unwrap_or(false)

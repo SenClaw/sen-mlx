@@ -2036,6 +2036,47 @@ fn generate_with_cache(
         let mut chunk_logits: Option<mlx_rs::Array> = None;
         let mut cursor = prefill_start;
         while cursor < prompt.len() {
+            // The caller hung up (the provider dropped the event pipe, which
+            // closed this channel). Decode notices that on its first send, but
+            // a prefill sends nothing: stop between chunks instead of spending
+            // the rest of it — tens of seconds on an agent prompt — on nobody.
+            if tx.is_closed() {
+                // Keep what was computed. A cancelled turn is usually asked
+                // again in the same chat, over the same system prompt and
+                // tools, and that request now resumes at `cursor` rather than
+                // prefilling it all a second time — which is what an
+                // unstoppable prefill used to buy by running to the end. The
+                // cache holds exactly `prompt[..cursor]` here (every chunk is
+                // evaluated before the next), so the snapshot needs no trim.
+                // Recurrent state is still snapshotted only at its clean
+                // boundary, as below.
+                let kept = prefix_cache_eligible
+                    && !recurrent_strict
+                    && cursor > prefill_start
+                    && cursor >= super::mlx_lm::prefix_cache::MIN_PREFIX_LEN
+                    && match super::mlx_lm::prefix_cache::PrefixCache::snapshot_layers_trimmed(
+                        &cache, 0,
+                    ) {
+                        Some(snap) => {
+                            state
+                                .prefix_cache
+                                .store(prompt[..cursor].to_vec(), snap, cursor);
+                            true
+                        }
+                        None => false,
+                    };
+                tracing::info!(
+                    "[local-mlx-native] prefill abandoned at {cursor}/{} tokens: caller gone{}",
+                    prompt.len(),
+                    if kept {
+                        " (computed prefix kept in the prefix cache)"
+                    } else {
+                        ""
+                    },
+                );
+                mlx_release_after_turn();
+                return Ok(());
+            }
             let mut end = (cursor + prefill_chunk).min(prompt.len());
             // Break the chunk exactly at the recurrent snapshot boundary so the
             // SSM/conv state can be captured aligned to the cache key.

@@ -869,7 +869,17 @@ pub async fn pipe_text_stream_to_events(
     mut parser: LocalStreamParser,
     event_tx: tokio::sync::mpsc::Sender<ParserEvent>,
 ) {
-    while let Some(chunk) = raw_rx.recv().await {
+    loop {
+        // Watch the far end while waiting too, not only when sending: the
+        // parser can hold a long reasoning block back, and a prefill sends no
+        // token at all, so a pipe that noticed only on send stayed open for
+        // an abandoned turn — and so did the engine's token channel, the one
+        // thing that stops its prefill and decode.
+        let chunk = tokio::select! {
+            chunk = raw_rx.recv() => chunk,
+            () = event_tx.closed() => return,
+        };
+        let Some(chunk) = chunk else { break };
         for ev in parser.push(&chunk) {
             if event_tx.send(ev).await.is_err() {
                 return;
@@ -888,6 +898,26 @@ pub async fn pipe_text_stream_to_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_pipe_hangs_up_on_the_engine_when_its_reader_goes_away() {
+        // A prefill sends no token and the parser may hold a reasoning block
+        // back, so the pipe must notice a gone reader while it waits — and
+        // close the engine's token channel, which is what stops generation.
+        let (raw_tx, raw_rx) = tokio::sync::mpsc::channel::<String>(4);
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel(4);
+        let pipe = tokio::spawn(pipe_text_stream_to_events(
+            raw_rx,
+            LocalStreamParser::new(MarkerSet::gemma4()),
+            event_tx,
+        ));
+        drop(event_rx);
+        tokio::time::timeout(std::time::Duration::from_secs(2), pipe)
+            .await
+            .expect("the pipe must return once nobody reads its events")
+            .unwrap();
+        assert!(raw_tx.is_closed(), "the engine's token channel must close with it");
+    }
 
     #[test]
     fn presets_match_known_dialects() {

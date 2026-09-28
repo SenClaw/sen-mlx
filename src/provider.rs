@@ -27,7 +27,7 @@ use app_space_sdk::llm::{ChatRequest, Chunk, ChunkSink, LlmProvider, ModelCard};
 use sen_runtime_sdk::server::Readiness;
 use tokio::sync::watch;
 
-use crate::engine::runtime::LocalModelRuntime;
+use crate::engine::stream_parser::ParserEvent;
 use crate::engine::MlxNativeEngine;
 
 /// Where the background load task is. `chat()` awaits this instead of
@@ -141,67 +141,61 @@ impl LlmProvider for MlxProvider {
     async fn chat(&self, req: ChatRequest, sink: ChunkSink) -> Result<()> {
         let engine = self.engine().await?;
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
+        // Events, not the raw token string. `stream_events_to_channel` runs the
+        // chunk-safe `LocalStreamParser` SemaClaw added for this and that the
+        // Space App provider never called: a marker split across two tokens
+        // stays buffered inside the parser until it completes, then comes out
+        // as visible text, reasoning, or one whole tool call. Sending those
+        // as they arrive is what resets the daemon's 120s read-stall timer
+        // during decode. Buffering the turn and parsing once at the end left
+        // the socket silent for the whole prefill (113s on a 37k-token Gemma
+        // prompt) plus decode, and the session was reset with
+        // "OpenAI stream chunk error".
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<ParserEvent>(32);
         let gen = {
             let engine = Arc::clone(&engine);
             let messages = req.messages.clone();
             let tools = req.tools.clone();
-            tokio::spawn(async move { engine.generate_stream(messages, tools, tx).await })
+            tokio::spawn(
+                async move { engine.stream_events_to_channel(&messages, &tools, tx).await },
+            )
         };
 
-        // Buffered, not forwarded token by token. A local model emits its tool
-        // calls and its reasoning as *text*, in whatever dialect its chat
-        // template uses, and a marker split across two tokens is only
-        // recognisable once both have arrived. Streaming the raw tokens through
-        // would leak `<|tool_call|>` and half-formed JSON into the visible
-        // answer.
-        let mut raw = String::new();
-        while let Some(chunk) = rx.recv().await {
-            raw.push_str(&chunk);
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                ParserEvent::Reasoning(s) if !s.is_empty() => {
+                    sink.send(Chunk::Reasoning(s)).await;
+                }
+                ParserEvent::Visible(s) if !s.is_empty() => {
+                    sink.send(Chunk::Text(s)).await;
+                }
+                ParserEvent::ToolCall(tc) => {
+                    // Emitted only once the closing marker has arrived, so the
+                    // name and arguments go out as one delta. The SDK assigns
+                    // the stream index.
+                    let id = tc["id"].as_str().unwrap_or_default().to_string();
+                    let name = tc["function"]["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    let arguments = tc["function"]["arguments"]
+                        .as_str()
+                        .unwrap_or("{}")
+                        .to_string();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    sink.send(Chunk::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                    })
+                    .await;
+                }
+                _ => {}
+            }
         }
         gen.await??;
-
-        // Parse with the model's *own* config, loaded from its
-        // `tokenizer_config.json` at load time. The dialect preset is a
-        // fallback for the case where the engine could not surface one, which
-        // should not happen after a successful load.
-        let (text, reasoning, tool_calls) = match engine.parser_config() {
-            Ok(cfg) => crate::engine::stream_parser::parse_complete_with_config(&raw, &cfg),
-            Err(e) => {
-                tracing::warn!("parser_config unavailable ({e}); falling back to a dialect preset");
-                let dialect = crate::engine::stream_parser::dialect_for_model_id(&req.model);
-                crate::engine::stream_parser::parse_complete(&raw, dialect)
-            }
-        };
-
-        if !reasoning.is_empty() {
-            sink.send(Chunk::Reasoning(reasoning)).await;
-        }
-        if !text.is_empty() {
-            sink.send(Chunk::Text(text)).await;
-        }
-        for tc in tool_calls {
-            // The parser returns OpenAI-shaped calls; the SDK re-renders them as
-            // indexed streaming deltas.
-            let id = tc["id"].as_str().unwrap_or_default().to_string();
-            let name = tc["function"]["name"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let arguments = tc["function"]["arguments"]
-                .as_str()
-                .unwrap_or("{}")
-                .to_string();
-            if name.is_empty() {
-                continue;
-            }
-            sink.send(Chunk::ToolCall {
-                id,
-                name,
-                arguments,
-            })
-            .await;
-        }
 
         if let Some((prompt_tokens, completion_tokens)) = engine.last_usage() {
             sink.send(Chunk::Usage {

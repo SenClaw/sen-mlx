@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "sen-mlx"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "MLX LLM runtime for SenClaw: chat + vision on Apple Silicon, launched by the daemon and driven over loopback HTTP"
 license = "MIT"

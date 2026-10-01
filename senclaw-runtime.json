@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sen-mlx",
   "name": "SenClaw MLX",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MLX LLM runtime for SenClaw: chat + vision on Apple Silicon",
   "type": "llm-engine",
   "slots": ["mlx"],
@@ -19,6 +19,6 @@
   "health": { "path": "/health", "startupTimeoutSecs": 300 },
   "api": { "openaiBase": "/v1" },
   "homepage": "https://github.com/SenClaw/sen-mlx",
-  "releaseNotesUrl": "https://github.com/SenClaw/sen-mlx/releases/tag/v0.1.0",
+  "releaseNotesUrl": "https://github.com/SenClaw/sen-mlx/releases/tag/v0.1.1",
   "license": "MIT"
 }

@@ -161,13 +161,16 @@ impl LlmProvider for MlxProvider {
         // prompt) plus decode, and the session was reset with
         // "OpenAI stream chunk error".
         let (tx, mut rx) = tokio::sync::mpsc::channel::<ParserEvent>(32);
+        let overrides = crate::settings::TurnOverrides::from_request(req.max_tokens, &req.raw);
         let gen = {
             let engine = Arc::clone(&engine);
             let messages = req.messages.clone();
             let tools = req.tools.clone();
-            tokio::spawn(
-                async move { engine.stream_events_to_channel(&messages, &tools, tx).await },
-            )
+            tokio::spawn(async move {
+                engine
+                    .stream_events_to_channel(&messages, &tools, overrides, tx)
+                    .await
+            })
         };
 
         let mut made_tool_call = false;

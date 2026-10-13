@@ -126,6 +126,43 @@ impl Settings {
     }
 }
 
+/// What one request may change about the stored settings for its own turn.
+///
+/// Read from the OpenAI body: `max_tokens` (or `max_completion_tokens`) and
+/// `chat_template_kwargs.enable_thinking`, the spelling vLLM, SGLang and
+/// llama.cpp's server use. Without it a caller that needs a short, structured
+/// answer — a Space App asking for one JSON object — got the user's chat
+/// settings instead: 8 192 tokens with thinking on ran a 2B model past the
+/// daemon's 120 s bridge timeout on every call.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TurnOverrides {
+    pub max_tokens: Option<u32>,
+    pub enable_thinking: Option<bool>,
+}
+
+impl TurnOverrides {
+    pub fn from_request(max_tokens: Option<u32>, raw: &serde_json::Value) -> Self {
+        Self {
+            max_tokens: max_tokens.filter(|n| *n > 0),
+            enable_thinking: raw["chat_template_kwargs"]["enable_thinking"].as_bool(),
+        }
+    }
+
+    /// The request's `max_tokens` only ever *lowers* the ceiling: the daemon's
+    /// own chat turns send their profile's cap on every request, and letting
+    /// that raise the user's `max_new_tokens` would change every chat's
+    /// output length behind the setting. Thinking is the caller's explicit
+    /// choice for its turn, either way.
+    pub fn apply(&self, s: &mut Settings) {
+        if let Some(n) = self.max_tokens {
+            s.max_new_tokens = Some(n.min(s.max_new_tokens()));
+        }
+        if let Some(t) = self.enable_thinking {
+            s.enable_thinking = Some(t);
+        }
+    }
+}
+
 pub fn settings_path(root: &Path) -> PathBuf {
     root.join("settings.json")
 }
@@ -248,6 +285,66 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(settings_path(dir.path()), "{ not json").unwrap();
         assert_eq!(load(dir.path()).max_new_tokens(), DEFAULT_MAX_NEW_TOKENS);
+    }
+
+    #[test]
+    fn a_request_lowers_the_token_ceiling_but_never_raises_it() {
+        let overrides = |n: u32| TurnOverrides::from_request(Some(n), &serde_json::json!({}));
+        let mut s = Settings {
+            max_new_tokens: Some(1024),
+            ..Default::default()
+        };
+        overrides(300).apply(&mut s);
+        assert_eq!(s.max_new_tokens(), 300);
+        let mut s = Settings {
+            max_new_tokens: Some(1024),
+            ..Default::default()
+        };
+        overrides(8192).apply(&mut s);
+        assert_eq!(
+            s.max_new_tokens(),
+            1024,
+            "a chat turn's profile cap must not override the user's setting"
+        );
+        let mut s = Settings::default();
+        overrides(1500).apply(&mut s);
+        assert_eq!(
+            s.max_new_tokens(),
+            1500,
+            "unset means the 8192 default, which 1500 lowers"
+        );
+        let mut s = Settings {
+            max_new_tokens: Some(1024),
+            ..Default::default()
+        };
+        TurnOverrides::from_request(Some(0), &serde_json::json!({})).apply(&mut s);
+        assert_eq!(
+            s.max_new_tokens(),
+            1024,
+            "0 is no cap, not a zero-token turn"
+        );
+    }
+
+    #[test]
+    fn a_request_can_turn_thinking_off_for_its_own_turn() {
+        let mut s = Settings {
+            enable_thinking: Some(true),
+            ..Default::default()
+        };
+        let raw = serde_json::json!({ "chat_template_kwargs": { "enable_thinking": false } });
+        TurnOverrides::from_request(None, &raw).apply(&mut s);
+        assert_eq!(s.enable_thinking, Some(false));
+        let mut untouched = Settings {
+            enable_thinking: Some(true),
+            ..Default::default()
+        };
+        TurnOverrides::from_request(None, &serde_json::json!({ "model": "m" }))
+            .apply(&mut untouched);
+        assert_eq!(
+            untouched.enable_thinking,
+            Some(true),
+            "no kwarg keeps the user's choice"
+        );
     }
 
     #[test]

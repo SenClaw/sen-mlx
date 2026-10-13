@@ -494,7 +494,13 @@ impl LocalModelRuntime for MlxNativeEngine {
         tools: Vec<serde_json::Value>,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<()> {
-        self.stream_openai_to_channel(&messages, &tools, tx).await
+        self.stream_openai_to_channel(
+            &messages,
+            &tools,
+            crate::settings::TurnOverrides::default(),
+            tx,
+        )
+        .await
     }
 }
 
@@ -517,13 +523,14 @@ impl MlxNativeEngine {
         &self,
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
+        overrides: crate::settings::TurnOverrides,
         event_tx: mpsc::Sender<super::stream_parser::ParserEvent>,
     ) -> anyhow::Result<()> {
         let config = self.parser_config()?;
         let (raw_tx, raw_rx) = mpsc::channel::<String>(64);
         let parser = super::stream_parser::LocalStreamParser::new(config.markers.clone());
 
-        let gen_fut = self.stream_openai_to_channel(messages, tools, raw_tx);
+        let gen_fut = self.stream_openai_to_channel(messages, tools, overrides, raw_tx);
         let pipe_fut = super::stream_parser::pipe_text_stream_to_events(raw_rx, parser, event_tx);
 
         let ((), gen_res) = tokio::join!(pipe_fut, gen_fut);
@@ -535,6 +542,7 @@ impl MlxNativeEngine {
         &self,
         messages: &[serde_json::Value],
         tools: &[serde_json::Value],
+        overrides: crate::settings::TurnOverrides,
         tx: mpsc::Sender<String>,
     ) -> anyhow::Result<()> {
         let loaded = Arc::clone(&self.loaded);
@@ -553,6 +561,7 @@ impl MlxNativeEngine {
                 &messages,
                 &tools,
                 kv_bits,
+                overrides,
                 tx,
                 &last_usage,
             )
@@ -1148,6 +1157,7 @@ fn generate_with_cache(
     messages: &[serde_json::Value],
     tools: &[serde_json::Value],
     _kv_cache_bits: Option<u8>,
+    overrides: crate::settings::TurnOverrides,
     tx: mpsc::Sender<String>,
     last_usage: &Mutex<Option<(usize, usize)>>,
 ) -> anyhow::Result<()> {
@@ -1174,7 +1184,11 @@ fn generate_with_cache(
     let n_layers = state.n_layers;
 
     let settings_dir = model_dir.parent().unwrap_or(model_dir);
-    let gen_opt = crate::settings::load(settings_dir);
+    let mut gen_opt = crate::settings::load(settings_dir);
+    // Applied before anything reads `gen_opt`, so the prompt template, the
+    // decode budget and the thinking-dependent sampling defaults all see the
+    // same per-turn values.
+    overrides.apply(&mut gen_opt);
 
     let messages = preprocess_openai_messages_for_mlx(messages);
     let enable_thinking = gen_opt.enable_thinking;
